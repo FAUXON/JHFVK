@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Multi Wallet Tracker</title>
+    <style>
+      body {
+        background: #111;
+        color: #0f0;
+        font-family: monospace;
+        padding: 20px;
+      }
+      #log {
+        background: #000;
+        border: 1px solid #0f0;
+        padding: 10px;
+        white-space: pre-wrap;
+        height: 200px;
+        overflow-y: scroll;
+        scrollbar-width: none;
+        border-radius: 1em;
+      }
+      button {
+        margin-bottom: 10px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 20px;
+        font-size: 1.5em;
+      }
+      table,
+      th,
+      td {
+        border: 1px solid #0f0;
+      }
+      th,
+      td {
+        padding: 8px;
+        text-align: left;
+      }
+      th {
+        background-color: #333;
+      }
+      td {
+        background-color: #222;
+      }
+      .positive {
+        color: #0f0;
+      }
+      .negative {
+        color: #f00;
+      }
+      .button-85 {
+        padding: 0.6em 2em;
+        border: none;
+        outline: none;
+        color: rgb(255, 255, 255);
+        background: #111;
+        cursor: pointer;
+        position: relative;
+        z-index: 0;
+        border-radius: 10px;
+        user-select: none;
+        -webkit-user-select: none;
+        touch-action: manipulation;
+      }
+
+      .button-85:before {
+        content: "";
+        background: linear-gradient(
+          45deg,
+          #00ff37,
+          #51ff00,
+          #fffb00,
+          #48ff00,
+          #00ff88,
+          #00ffd5,
+          #00ff7b,
+          #ffbf00,
+          #ff0000
+        );
+        position: absolute;
+        top: -2px;
+        left: -2px;
+        background-size: 400%;
+        z-index: -1;
+        filter: blur(5px);
+        -webkit-filter: blur(5px);
+        width: calc(100% + 4px);
+        height: calc(100% + 4px);
+        animation: glowing-button-85 20s linear infinite;
+        transition: opacity 0.3s ease-in-out;
+        border-radius: 10px;
+      }
+
+      @keyframes glowing-button-85 {
+        0% {
+          background-position: 0 0;
+        }
+        50% {
+          background-position: 400% 0;
+        }
+        100% {
+          background-position: 0 0;
+        }
+      }
+
+      .button-85:after {
+        z-index: -1;
+        content: "";
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        background: #222;
+        left: 0;
+        top: 0;
+        border-radius: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <h2>wallet tracker fauxon</h2>
+    <button class="button-85" onclick="startTracking()">Démarrer</button>
+    <div id="log">En attente...</div>
+
+    <table id="balanceTable">
+      <thead>
+        <tr>
+          <th>Blockchain</th>
+          <th>Adresse</th>
+          <th>Solde</th>
+          <th>Changement</th>
+        </tr>
+      </thead>
+      <tbody>
+        <!-- Les données de solde seront ajoutées ici -->
+      </tbody>
+    </table>
+    <div id="tg"></div>
+    <!-- Sons -->
+    <audio id="soundUp" src="up.mp3" preload="auto"></audio>
+    <audio id="soundDown" src="down.mp3" preload="auto"></audio>
+
+    <script>
+      const balances = {};
+      const soundUp = document.getElementById("soundUp");
+      const soundDown = document.getElementById("soundDown");
+
+      function log(msg) {
+        const div = document.getElementById("log");
+        div.innerText =
+          `${new Date().toLocaleTimeString()} - ${msg}\n` + div.innerText;
+        div.scrollTop = div.scrollHeight; // Assure que le log défile jusqu'au bas
+      }
+
+      async function loadWallets() {
+        const res = await fetch("wallets.json");
+        return await res.json();
+      }
+
+      async function getSolanaBalance(addr) {
+        const res = await fetch(
+          "https://indulgent-thrilling-daylight.solana-mainnet.quiknode.pro/8a3d705d8224f8da3c72ca985e01dfd79b4f39d0/",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              jsonrpc: "2.0",
+              id: 1,
+              method: "getBalance",
+              params: [addr],
+            }),
+          }
+        );
+        const json = await res.json();
+        return json.result?.value / 1e9;
+      }
+
+      async function getEthOrBnbBalance(addr, chain) {
+        const apiKey = "7SHNJY5ND56DKS7WWDVWWCEH55NVVAX3WU"; // Ta clé API
+        const api =
+          chain === "eth"
+            ? "https://api.etherscan.io/api"
+            : "https://api.bscscan.com/api";
+
+        const url = `${api}?module=account&action=balance&address=${addr}&tag=latest&apikey=${apiKey}`;
+
+        const res = await fetch(url);
+        const json = await res.json();
+
+        if (json.status !== "1") throw new Error("Erreur API " + chain);
+        return parseFloat(json.result) / 1e18; // Conversion du solde de Wei en Ether ou BNB
+      }
+
+      async function fetchBalance(type, addr) {
+        switch (type) {
+          case "solana":
+            return await getSolanaBalance(addr);
+          case "eth":
+          case "bnb":
+            return await getEthOrBnbBalance(addr, type);
+          default:
+            throw new Error("Type non supporté: " + type);
+        }
+      }
+
+      async function updateTable(type, addr, balance, change) {
+        const tableBody = document
+          .getElementById("balanceTable")
+          .getElementsByTagName("tbody")[0];
+        const row = document.createElement("tr");
+
+        const changeClass =
+          change > 0 ? "positive" : change < 0 ? "negative" : "";
+
+        row.innerHTML = `
+          <td>${type.toUpperCase()}</td>
+          <td>${addr.slice(0, 6)}...</td>
+          <td>${balance.toFixed(6)}</td>
+          <td class="${changeClass}">${
+          change > 0 ? "⬆️" : change < 0 ? "⬇️" : "⏸️"
+        } ${Math.abs(change).toFixed(6)}</td>
+        `;
+
+        tableBody.appendChild(row);
+      }
+
+      async function sendTelegramMessage(
+        type,
+        addr,
+        oldBalance,
+        newBalance,
+        message = ""
+      ) {
+        const botToken = "7666189213:AAHjSaKe_K0rWTrPZ-juG8JkDzFE0u7ezBE";
+        const chatId = "6622394161";
+
+        let finalMessage = message;
+
+        if (message === "") {
+          const diff = newBalance - oldBalance;
+          const direction = diff > 0 ? "⬆️" : diff < 0 ? "⬇️" : "⏸️";
+
+          finalMessage = `${type.toUpperCase()} ${addr.slice(
+            0,
+            6
+          )}... ${direction} ${Math.abs(diff).toFixed(
+            6
+          )} (→ ${newBalance.toFixed(6)})`;
+        }
+
+        const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
+        const params = {
+          chat_id: chatId,
+          text: finalMessage,
+        };
+
+        try {
+          const response = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(params),
+          });
+          const data = await response.json();
+          if (data.ok) {
+            console.log("Message envoyé à Telegram !");
+          } else {
+            console.error(
+              "Erreur lors de l'envoi du message à Telegram",
+              data.description
+            );
+          }
+        } catch (error) {
+          console.error("Erreur de réseau", error);
+        }
+      }
+
+      // Envoyer le message contenant tous les soldes
+      async function sendAllBalances() {
+        let allBalancesMessage = "📊 Solde de toutes les adresses :\n\n";
+        for (const [key, balance] of Object.entries(balances)) {
+          const [type, addr] = key.split(":");
+          allBalancesMessage += `${type.toUpperCase()} ${addr.slice(
+            0,
+            6
+          )}... : ${balance.toFixed(6)}\n`;
+        }
+
+        // Envoi de tous les soldes à Telegram
+        await sendTelegramMessage("solde", "", 0, 0, allBalancesMessage);
+        document.querySelector("#tg").innerHTML += `.-.`;
+      }
+
+      async function checkOne(type, addr) {
+        try {
+          const bal = await fetchBalance(type, addr);
+          const key = `${type}:${addr}`;
+          const old = balances[key];
+
+          if (old == null) {
+            balances[key] = bal;
+            log(
+              `${type.toUpperCase()} ${addr.slice(0, 6)}... → ${bal.toFixed(6)}`
+            );
+            await updateTable(type, addr, bal, 0);
+          } else if (old !== bal) {
+            const diff = bal - old;
+            const direction = diff > 0 ? "⬆️" : "⬇️";
+
+            // 🔊 Lecture du son
+            if (diff > 0) soundUp.play();
+            else soundDown.play();
+
+            log(
+              `${type.toUpperCase()} ${addr.slice(
+                0,
+                6
+              )}... ${direction} ${Math.abs(diff).toFixed(6)} (→ ${bal.toFixed(
+                6
+              )})`
+            );
+            balances[key] = bal;
+            await updateTable(type, addr, bal, diff);
+            // Envoi du message Telegram avec le changement de solde
+            await sendTelegramMessage(type, addr, old, bal);
+          } else {
+            log(
+              `${type.toUpperCase()} ${addr.slice(0, 6)}... ⏸️ ${bal.toFixed(
+                6
+              )}`
+            );
+          }
+        } catch (e) {
+          log(`${type.toUpperCase()} ${addr.slice(0, 6)}... ❌ ${e.message}`);
+        }
+      }
+
+      async function startTracking() {
+        const wallets = await loadWallets();
+        log("📄 Chargement des adresses...");
+
+        function loop() {
+          for (const type of Object.keys(wallets)) {
+            for (const addr of wallets[type]) {
+              checkOne(type, addr);
+            }
+          }
+        }
+
+        loop();
+        setInterval(loop, 10000); // Suivi toutes les 10 secondes
+        log("🟢 Suivi lancé !");
+
+        // Envoi des soldes toutes les 5 minutes
+        setInterval(sendAllBalances, 300000); // 5 minutes en millisecondes
+      }
+      startTracking();
+    </script>
+  </body>
+</html>
